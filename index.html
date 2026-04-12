@@ -520,9 +520,13 @@
       updateHint(); removePhoto();
       document.getElementById('erleger-suggestions').innerHTML='';
       document.getElementById('datum').value=new Date().toISOString().split('T')[0];
+      btn.disabled=false; btn.textContent='Eintrag speichern';
       showToast('success','✓ Eintrag gespeichert!');
-    } catch(e){showToast('error','Fehler: '+e.message);console.error(e);}
-    finally{btn.disabled=false;btn.textContent='Eintrag speichern';}
+    } catch(e){
+      btn.disabled=false; btn.textContent='Eintrag speichern';
+      showToast('error','Fehler: '+e.message);
+      console.error(e);
+    }
   }
 
   // ── Edit modal ─────────────────────────────────────────────────
@@ -618,27 +622,29 @@
     if(!entries.length){el.innerHTML='<div class="empty">Keine Daten für diese Saison.</div>';return;}
 
     const total=entries.length;
-    const weights=entries.map(e=>parseFloat(e.gewicht)).filter(w=>!isNaN(w)&&w>0);
-    const avgW=weights.length?(weights.reduce((a,b)=>a+b,0)/weights.length).toFixed(1):'–';
-    const maxW=weights.length?Math.max(...weights).toFixed(1):'–';
+    const allReviere=[...new Set(entries.map(e=>e.revier).filter(Boolean))].sort();
+    const allWildarten=[...new Set(entries.map(e=>e.wildart).filter(Boolean))].sort();
+    const allErleger=[...new Set(entries.map(e=>e.erleger).filter(Boolean))].sort();
 
-    // Wildart x Revier matrix
-    const reviere=['GJB Kavelstorf III','Jahning'];
-    const wildarten=[...new Set(entries.map(e=>e.wildart).filter(Boolean))].sort();
+    // ── Gesamtstrecke oben ──────────────────────────────────────
+    const totalHTML=`<div class="stats-grid" style="margin-bottom:20px;">
+      <div class="stat-card" style="grid-column:1/-1;"><div class="stat-label">Gesamtstrecke Saison ${currentSeason}</div><div class="stat-value">${total}</div></div>
+    </div>`;
+
+    // ── Wildart x Revier ────────────────────────────────────────
     let wildRevierHTML='';
-    wildarten.forEach(w=>{
+    allWildarten.forEach(w=>{
       const revierCounts={};
-      reviere.forEach(r=>{
+      allReviere.forEach(r=>{
         const c=entries.filter(e=>e.wildart===w&&e.revier===r).length;
         if(c>0) revierCounts[r]=c;
       });
-      const otherReviere=[...new Set(entries.filter(e=>e.wildart===w&&!reviere.includes(e.revier)).map(e=>e.revier).filter(Boolean))];
-      otherReviere.forEach(r=>{revierCounts[r]=entries.filter(e=>e.wildart===w&&e.revier===r).length;});
+      if(!Object.keys(revierCounts).length) return;
       const totalW=entries.filter(e=>e.wildart===w).length;
       const maxC=Math.max(...Object.values(revierCounts),1);
       wildRevierHTML+=`<div class="sub-section">
-        <div class="sub-title">${w} — ${totalW} gesamt</div>
-        ${Object.entries(revierCounts).map(([r,c])=>`
+        <div class="sub-title">${w} <span style="font-weight:400;color:var(--text2);">— ${totalW} gesamt</span></div>
+        ${Object.entries(revierCounts).sort((a,b)=>b[1]-a[1]).map(([r,c])=>`
           <div class="bar-row">
             <div class="bar-lbl">${r}</div>
             <div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/maxC*100)}%"></div></div>
@@ -647,44 +653,39 @@
       </div>`;
     });
 
-    // Erleger stats
-    const erlegerMap={};
-    entries.forEach(e=>{
-      if(!e.erleger) return;
-      if(!erlegerMap[e.erleger]) erlegerMap[e.erleger]={};
-      erlegerMap[e.erleger][e.wildart]=(erlegerMap[e.erleger][e.wildart]||0)+1;
-    });
+    // ── Pro Erleger: Wildart x Revier ───────────────────────────
     let erlegerHTML='';
-    Object.entries(erlegerMap).sort((a,b)=>{
-      const ta=Object.values(a[1]).reduce((s,v)=>s+v,0);
-      const tb=Object.values(b[1]).reduce((s,v)=>s+v,0);
-      return tb-ta;
-    }).forEach(([name,wildC])=>{
-      const totalE=Object.values(wildC).reduce((s,v)=>s+v,0);
-      const maxC=Math.max(...Object.values(wildC),1);
+    allErleger.forEach(name=>{
+      const eEntries=entries.filter(e=>e.erleger===name);
+      const totalE=eEntries.length;
+      const eWildarten=[...new Set(eEntries.map(e=>e.wildart).filter(Boolean))].sort();
+
+      const wildCounts={};
+      eWildarten.forEach(w=>{ wildCounts[w]=eEntries.filter(e=>e.wildart===w).length; });
+      const maxC=Math.max(...Object.values(wildCounts),1);
+      const erlegerWildHTML=Object.entries(wildCounts).sort((a,b)=>b[1]-a[1]).map(([w,c])=>`
+        <div class="bar-row">
+          <div class="bar-lbl">${w}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/maxC*100)}%"></div></div>
+          <div class="bar-n">${c}</div>
+        </div>`).join('');
+
       erlegerHTML+=`<div class="sub-section">
-        <div class="sub-title">👤 ${name} — ${totalE} gesamt</div>
-        ${Object.entries(wildC).sort((a,b)=>b[1]-a[1]).map(([w,c])=>`
-          <div class="bar-row">
-            <div class="bar-lbl">${w}</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/maxC*100)}%"></div></div>
-            <div class="bar-n">${c}</div>
-          </div>`).join('')}
+        <div class="sub-title">👤 ${name} <span style="font-weight:400;color:var(--text2);">— ${totalE} gesamt</span></div>
+        ${erlegerWildHTML}
       </div>`;
     });
 
     el.innerHTML=`
-      <div class="stats-grid">
-        <div class="stat-card"><div class="stat-label">Gesamtstrecke</div><div class="stat-value">${total}</div></div>
-        <div class="stat-card"><div class="stat-label">Ø Gewicht</div><div class="stat-value">${avgW!=='–'?avgW+'kg':'–'}</div></div>
-        <div class="stat-card"><div class="stat-label">Schwerste Beute</div><div class="stat-value">${maxW!=='–'?maxW+'kg':'–'}</div></div>
-        <div class="stat-card"><div class="stat-label">Erleger</div><div class="stat-value">${Object.keys(erlegerMap).length}</div></div>
-      </div>
-      <div class="chart-section">
+      ${totalHTML}
+      ${wildRevierHTML?`<div class="chart-section">
         <div class="chart-title">Strecke nach Wildart & Revier</div>
-        ${wildRevierHTML||'<div class="empty" style="padding:12px 0;">Keine Daten</div>'}
-      </div>
-      ${erlegerHTML?`<div class="chart-section"><div class="chart-title">Statistik pro Erleger</div>${erlegerHTML}</div>`:''}
+        ${wildRevierHTML}
+      </div>`:''}
+      ${erlegerHTML?`<div class="chart-section">
+        <div class="chart-title">Statistik pro Erleger</div>
+        ${erlegerHTML}
+      </div>`:''}
     `;
   }
 
