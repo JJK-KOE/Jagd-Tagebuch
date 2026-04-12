@@ -515,25 +515,24 @@
       photo:currentPhotoBase64||null
     };
 
-    // Optimistic update — show immediately in UI, no waiting
-    allEntries.unshift({...entry, _docId:'pending'});
-    rebuildSeasons();
-    renderAll();
-
-    // Reset form instantly
-    ['wildart','marke','geschlecht','gewicht','ak','revier','erleger','anmerkung'].forEach(id=>{
-      const el=document.getElementById(id); if(el) el.value='';
-    });
-    updateHint(); removePhoto();
-    document.getElementById('erleger-suggestions').innerHTML='';
-    document.getElementById('datum').value=new Date().toISOString().split('T')[0];
-    showToast('success','✓ Eintrag gespeichert!');
-
-    // Sync to Firebase in background
-    db.collection('entries').add(entry).catch(e=>{
-      showToast('error','Sync-Fehler: '+e.message);
+    // Save to Firebase — onSnapshot updates UI on all devices automatically
+    try {
+      await db.collection('entries').add(entry);
+      ['wildart','geschlecht','ak','revier'].forEach(id=>{
+        const el=document.getElementById(id);
+        if(el) el.selectedIndex=0;
+      });
+      ['marke','gewicht','erleger','anmerkung'].forEach(id=>{
+        const el=document.getElementById(id); if(el) el.value='';
+      });
+      updateHint(); removePhoto();
+      document.getElementById('erleger-suggestions').innerHTML='';
+      document.getElementById('datum').value=new Date().toISOString().split('T')[0];
+      showToast('success','✓ Eintrag gespeichert!');
+    } catch(e){
+      showToast('error','Fehler: '+e.message);
       console.error(e);
-    });
+    }
   }
 
   // ── Edit modal ─────────────────────────────────────────────────
