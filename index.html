@@ -316,6 +316,10 @@
     appId:"1:797083613111:web:f607fd434fe0f946a91a32"
   });
   const db = firebase.firestore();
+  db.enablePersistence({ synchronizeTabs: true }).catch(err => {
+    if (err.code === 'failed-precondition') console.log('Persistence: multiple tabs');
+    else if (err.code === 'unimplemented') console.log('Persistence not supported');
+  });
 
   let allEntries = [];
   let availableSeasons = [];
@@ -499,9 +503,6 @@
     const marke=document.getElementById('marke').value;
     if(!wildart){showToast('error','Bitte Wildart auswählen.');return;}
     if(marke&&marke.length!==7){showToast('error','Wildmarkennummer muss genau 7 Ziffern haben.');return;}
-    const btn=document.querySelector('#tab-erfassen .btn-save');
-    btn.disabled=true; btn.textContent='Speichert …';
-    setTimeout(()=>{ btn.disabled=false; btn.textContent='Eintrag speichern'; }, 3000);
     const entry={
       id:Date.now(), wildart, marke:marke||'',
       geschlecht:document.getElementById('geschlecht').value||'',
@@ -513,19 +514,26 @@
       anmerkung:document.getElementById('anmerkung').value||'',
       photo:currentPhotoBase64||null
     };
-    try {
-      await db.collection('entries').add(entry);
-      ['wildart','marke','geschlecht','gewicht','ak','revier','erleger','anmerkung'].forEach(id=>{
-        const el=document.getElementById(id); if(el) el.value='';
-      });
-      updateHint(); removePhoto();
-      document.getElementById('erleger-suggestions').innerHTML='';
-      document.getElementById('datum').value=new Date().toISOString().split('T')[0];
-      showToast('success','✓ Eintrag gespeichert!');
-    } catch(e){
-      showToast('error','Fehler: '+e.message);
+
+    // Optimistic update — show immediately in UI, no waiting
+    allEntries.unshift({...entry, _docId:'pending'});
+    rebuildSeasons();
+    renderAll();
+
+    // Reset form instantly
+    ['wildart','marke','geschlecht','gewicht','ak','revier','erleger','anmerkung'].forEach(id=>{
+      const el=document.getElementById(id); if(el) el.value='';
+    });
+    updateHint(); removePhoto();
+    document.getElementById('erleger-suggestions').innerHTML='';
+    document.getElementById('datum').value=new Date().toISOString().split('T')[0];
+    showToast('success','✓ Eintrag gespeichert!');
+
+    // Sync to Firebase in background
+    db.collection('entries').add(entry).catch(e=>{
+      showToast('error','Sync-Fehler: '+e.message);
       console.error(e);
-    }
+    });
   }
 
   // ── Edit modal ─────────────────────────────────────────────────
