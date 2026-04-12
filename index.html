@@ -502,10 +502,9 @@
   </div>
 </div>
 
-<script type="module">
-  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-  import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
-
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
   const firebaseConfig = {
     apiKey: "AIzaSyDjpox0VLVHz0ztv7IsCuCxp9fgqXTQQTo",
     authDomain: "jagd-tagebuch.firebaseapp.com",
@@ -514,29 +513,33 @@
     messagingSenderId: "797083613111",
     appId: "1:797083613111:web:f607fd434fe0f946a91a32"
   };
-
-  const app = initializeApp(firebaseConfig);
-  const db = getFirestore(app);
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
 
   let allEntries = [];
   let currentSeason = '';
   let currentPhotoBase64 = null;
 
-  const q = query(collection(db, 'entries'), orderBy('id', 'desc'));
-  onSnapshot(q, (snapshot) => {
+  // Live sync
+  db.collection('entries').orderBy('id', 'desc').onSnapshot(snapshot => {
     allEntries = snapshot.docs.map(d => ({ ...d.data(), _docId: d.id }));
     buildSeasonSelect();
     populateFilters();
     renderListe();
     renderStats();
     setStatus('online');
-  }, () => { setStatus('offline'); });
+  }, () => setStatus('offline'));
 
   function setStatus(state) {
     const el = document.getElementById('sync-status');
     if (!el) return;
     if (state === 'online') { el.textContent = '● Synchronisiert'; el.style.color = 'var(--green-text)'; }
     else { el.textContent = '○ Offline'; el.style.color = 'var(--text3)'; }
+  }
+
+  function updateHint() {
+    const v = document.getElementById('marke').value.length;
+    document.getElementById('marke-hint').textContent = v + ' / 7 Ziffern';
   }
 
   function onPhotoSelected(event) {
@@ -547,13 +550,13 @@
       const img = new Image();
       img.onload = function() {
         const canvas = document.createElement('canvas');
-        const MAX = 1200;
+        const MAX = 1000;
         let w = img.width, h = img.height;
         if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
         if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
         canvas.width = w; canvas.height = h;
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        currentPhotoBase64 = canvas.toDataURL('image/jpeg', 0.75);
+        currentPhotoBase64 = canvas.toDataURL('image/jpeg', 0.7);
         document.getElementById('photo-preview').src = currentPhotoBase64;
         document.getElementById('photo-preview-wrap').style.display = 'block';
         document.getElementById('photo-upload-area').style.display = 'none';
@@ -569,11 +572,6 @@
     document.getElementById('photo-preview').src = '';
     document.getElementById('photo-preview-wrap').style.display = 'none';
     document.getElementById('photo-upload-area').style.display = 'block';
-  }
-
-  function updateHint() {
-    const v = document.getElementById('marke').value.length;
-    document.getElementById('marke-hint').textContent = v + ' / 7 Ziffern';
   }
 
   function getSeason(dateStr) {
@@ -596,10 +594,11 @@
 
   function buildSeasonSelect() {
     const sel = document.getElementById('season-select');
+    const prev = sel.value;
     const seasons = getAllSeasons();
     sel.innerHTML = seasons.map(s => `<option value="${s}">Saison ${s}</option>`).join('');
-    if (!currentSeason || !seasons.includes(currentSeason)) currentSeason = seasons[0];
-    sel.value = currentSeason;
+    if (prev && seasons.includes(prev)) { sel.value = prev; currentSeason = prev; }
+    else { currentSeason = seasons[0]; sel.value = currentSeason; }
     document.getElementById('season-badge').textContent = currentSeason;
   }
 
@@ -613,12 +612,6 @@
 
   function getSeasonEntries(season) {
     return allEntries.filter(e => getSeason(e.datum) === season);
-  }
-
-  async function saveEntryToFirebase(entry) {
-    try {
-      await addDoc(collection(db, 'entries'), entry);
-    } catch(e) { showToast('error', 'Fehler beim Speichern!'); }
   }
 
   function populateFilters() {
@@ -655,9 +648,10 @@
 
   function showToast(type, msg) {
     const el = document.getElementById('toast-' + type);
+    if (!el) return;
     if (msg) el.textContent = msg;
     el.style.display = 'block';
-    setTimeout(() => el.style.display = 'none', 2800);
+    setTimeout(() => el.style.display = 'none', 3000);
   }
 
   async function saveEntry() {
@@ -679,12 +673,15 @@
       photo: currentPhotoBase64 || null
     };
 
-    await saveEntryToFirebase(entry);
-
-    ['wildart','marke','geschlecht','gewicht','ak','anmerkung'].forEach(id => document.getElementById(id).value = '');
-    updateHint();
-    removePhoto();
-    showToast('success');
+    try {
+      await db.collection('entries').add(entry);
+      ['wildart','marke','geschlecht','gewicht','ak','anmerkung'].forEach(id => document.getElementById(id).value = '');
+      updateHint();
+      removePhoto();
+      showToast('success', '✓ Eintrag gespeichert!');
+    } catch(e) {
+      showToast('error', 'Fehler beim Speichern: ' + e.message);
+    }
   }
 
   function fmtDate(d) {
@@ -698,17 +695,14 @@
     const entry = allEntries.find(e => e.id == id);
     if (!entry || !entry._docId) return;
     try {
-      await deleteDoc(doc(db, 'entries', entry._docId));
+      await db.collection('entries').doc(entry._docId).delete();
     } catch(e) { showToast('error', 'Fehler beim Löschen!'); }
   }
 
   function renderListe() {
     const entries = getFilteredEntries();
     const el = document.getElementById('liste-content');
-    if (!entries.length) {
-      el.innerHTML = '<div class="empty">Keine Einträge für diese Auswahl.</div>';
-      return;
-    }
+    if (!entries.length) { el.innerHTML = '<div class="empty">Keine Einträge für diese Auswahl.</div>'; return; }
     el.innerHTML = entries.map(e => `
       <div class="list-item">
         <div class="list-top">
@@ -726,7 +720,7 @@
         </div>
         ${e.revier ? `<div class="list-revier">📍 ${e.revier}</div>` : ''}
         ${e.anmerkung ? `<div class="list-anm">${e.anmerkung}</div>` : ''}
-        ${e.photo ? `<div class="list-photo"><img src="${e.photo}" alt="Wildmarke" onclick="viewPhoto('${e.id}')" /></div>` : ''}
+        ${e.photo ? `<div class="list-photo"><img src="${e.photo}" alt="Wildmarke" onclick="viewPhoto(${e.id})" /></div>` : ''}
       </div>
     `).join('');
   }
@@ -734,23 +728,17 @@
   function renderStats() {
     const entries = getSeasonEntries(currentSeason);
     const el = document.getElementById('stats-content');
-    if (!entries.length) {
-      el.innerHTML = '<div class="empty">Keine Daten für diese Saison.</div>';
-      return;
-    }
+    if (!entries.length) { el.innerHTML = '<div class="empty">Keine Daten für diese Saison.</div>'; return; }
     const total = entries.length;
     const weights = entries.map(e => parseFloat(e.gewicht)).filter(w => !isNaN(w) && w > 0);
     const avgW = weights.length ? (weights.reduce((a,b)=>a+b,0)/weights.length).toFixed(1) : '–';
     const maxW = weights.length ? Math.max(...weights).toFixed(1) : '–';
-
     const wildC = {}, revierC = {};
     entries.forEach(e => { wildC[e.wildart] = (wildC[e.wildart]||0)+1; });
     entries.forEach(e => { if(e.revier) revierC[e.revier] = (revierC[e.revier]||0)+1; });
-
     const topWild = Object.entries(wildC).sort((a,b)=>b[1]-a[1]);
     const topRevier = Object.entries(revierC).sort((a,b)=>b[1]-a[1]).slice(0,5);
     const mW = topWild[0]?.[1]||1, mR = topRevier[0]?.[1]||1;
-
     el.innerHTML = `
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-label">Gesamtstrecke</div><div class="stat-value">${total}</div></div>
@@ -761,21 +749,16 @@
       <div class="chart-section">
         <div class="chart-title">Strecke nach Wildart</div>
         ${topWild.map(([n,c])=>`
-          <div class="bar-row">
-            <div class="bar-lbl">${n}</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/mW*100)}%"></div></div>
-            <div class="bar-n">${c}</div>
-          </div>`).join('')}
+          <div class="bar-row"><div class="bar-lbl">${n}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/mW*100)}%"></div></div>
+          <div class="bar-n">${c}</div></div>`).join('')}
       </div>
-      ${topRevier.length ? `
-      <div class="chart-section">
+      ${topRevier.length ? `<div class="chart-section">
         <div class="chart-title">Strecke nach Revier</div>
         ${topRevier.map(([n,c])=>`
-          <div class="bar-row">
-            <div class="bar-lbl">${n}</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/mR*100)}%"></div></div>
-            <div class="bar-n">${c}</div>
-          </div>`).join('')}
+          <div class="bar-row"><div class="bar-lbl">${n}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/mR*100)}%"></div></div>
+          <div class="bar-n">${c}</div></div>`).join('')}
       </div>` : ''}
     `;
   }
@@ -789,7 +772,8 @@
       e.geschlecht||'', e.gewicht||'', e.ak !== undefined ? e.ak : '',
       e.revier||'', (e.anmerkung||'').replace(/"/g,'""')
     ].map(v=>`"${v}"`).join(';'));
-    const csv = '\uFEFF' + [headers.join(';'), ...rows].join('\n');
+    const csv = '﻿' + [headers.join(';'), ...rows].join('
+');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -812,7 +796,6 @@
 
   document.getElementById('datum').value = new Date().toISOString().split('T')[0];
   buildSeasonSelect();
-  currentSeason = currentSeasonNow();
 </script>
 </body>
 </html>
