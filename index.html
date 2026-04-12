@@ -501,6 +501,7 @@
     if(marke&&marke.length!==7){showToast('error','Wildmarkennummer muss genau 7 Ziffern haben.');return;}
     const btn=document.querySelector('#tab-erfassen .btn-save');
     btn.disabled=true; btn.textContent='Speichert …';
+    setTimeout(()=>{ btn.disabled=false; btn.textContent='Eintrag speichern'; }, 3000);
     const entry={
       id:Date.now(), wildart, marke:marke||'',
       geschlecht:document.getElementById('geschlecht').value||'',
@@ -520,10 +521,8 @@
       updateHint(); removePhoto();
       document.getElementById('erleger-suggestions').innerHTML='';
       document.getElementById('datum').value=new Date().toISOString().split('T')[0];
-      btn.disabled=false; btn.textContent='Eintrag speichern';
       showToast('success','✓ Eintrag gespeichert!');
     } catch(e){
-      btn.disabled=false; btn.textContent='Eintrag speichern';
       showToast('error','Fehler: '+e.message);
       console.error(e);
     }
