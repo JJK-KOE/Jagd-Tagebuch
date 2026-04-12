@@ -368,8 +368,9 @@
   <div style="padding:6px 20px;background:var(--bg2);border-bottom:0.5px solid var(--border);font-size:12px;"><span id="sync-status" style="color:var(--text3);">○ Verbinde …</span></div>
 
   <div class="season-bar">
-    <label>Jagdsaison</label>
+    <label>Saison</label>
     <select id="season-select" onchange="onSeasonChange()"></select>
+    <button onclick="addSeason()" style="flex-shrink:0;padding:7px 12px;font-size:13px;font-weight:500;background:var(--text);color:var(--bg);border:none;border-radius:var(--radius);cursor:pointer;font-family:inherit;">+ Neu</button>
   </div>
 
   <div class="tabs">
@@ -513,67 +514,43 @@
     messagingSenderId: "797083613111",
     appId: "1:797083613111:web:f607fd434fe0f946a91a32"
   };
+
   firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
 
   let allEntries = [];
+  let availableSeasons = [];
   let currentSeason = '';
   let currentPhotoBase64 = null;
 
-  // Live sync
-  db.collection('entries').orderBy('id', 'desc').onSnapshot(snapshot => {
+  // ── Firebase sync ──────────────────────────────────────────────
+  db.collection('entries').orderBy('id','desc').onSnapshot(snapshot => {
     allEntries = snapshot.docs.map(d => ({ ...d.data(), _docId: d.id }));
-    buildSeasonSelect();
-    populateFilters();
-    renderListe();
-    renderStats();
+    rebuildSeasons();
+    renderAll();
     setStatus('online');
-  }, () => setStatus('offline'));
+  }, err => {
+    console.error('Firestore error:', err);
+    setStatus('offline');
+  });
+
+  db.collection('seasons').orderBy('label','desc').onSnapshot(snapshot => {
+    const fromDb = snapshot.docs.map(d => d.data().label);
+    // merge with seasons derived from entries
+    const fromEntries = allEntries.map(e => getSeason(e.datum)).filter(Boolean);
+    const merged = [...new Set([...fromDb, ...fromEntries, currentSeasonNow()])].sort().reverse();
+    availableSeasons = merged;
+    buildSeasonSelect();
+  }, () => {});
 
   function setStatus(state) {
     const el = document.getElementById('sync-status');
     if (!el) return;
     if (state === 'online') { el.textContent = '● Synchronisiert'; el.style.color = 'var(--green-text)'; }
-    else { el.textContent = '○ Offline'; el.style.color = 'var(--text3)'; }
+    else { el.textContent = '○ Offline — prüfe Internetverbindung'; el.style.color = 'var(--red-text)'; }
   }
 
-  function updateHint() {
-    const v = document.getElementById('marke').value.length;
-    document.getElementById('marke-hint').textContent = v + ' / 7 Ziffern';
-  }
-
-  function onPhotoSelected(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      const img = new Image();
-      img.onload = function() {
-        const canvas = document.createElement('canvas');
-        const MAX = 1000;
-        let w = img.width, h = img.height;
-        if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
-        if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        currentPhotoBase64 = canvas.toDataURL('image/jpeg', 0.7);
-        document.getElementById('photo-preview').src = currentPhotoBase64;
-        document.getElementById('photo-preview-wrap').style.display = 'block';
-        document.getElementById('photo-upload-area').style.display = 'none';
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  }
-
-  function removePhoto() {
-    currentPhotoBase64 = null;
-    document.getElementById('photo-input').value = '';
-    document.getElementById('photo-preview').src = '';
-    document.getElementById('photo-preview-wrap').style.display = 'none';
-    document.getElementById('photo-upload-area').style.display = 'block';
-  }
-
+  // ── Season helpers ─────────────────────────────────────────────
   function getSeason(dateStr) {
     if (!dateStr) return null;
     const d = new Date(dateStr);
@@ -586,25 +563,44 @@
     return m >= 4 ? y+'/'+(y+1) : (y-1)+'/'+y;
   }
 
-  function getAllSeasons() {
-    const s = new Set(allEntries.map(e => getSeason(e.datum)).filter(Boolean));
-    s.add(currentSeasonNow());
-    return [...s].sort().reverse();
+  function rebuildSeasons() {
+    const fromEntries = allEntries.map(e => getSeason(e.datum)).filter(Boolean);
+    const merged = [...new Set([...availableSeasons, ...fromEntries, currentSeasonNow()])].sort().reverse();
+    availableSeasons = merged;
+    buildSeasonSelect();
   }
 
   function buildSeasonSelect() {
     const sel = document.getElementById('season-select');
-    const prev = sel.value;
-    const seasons = getAllSeasons();
-    sel.innerHTML = seasons.map(s => `<option value="${s}">Saison ${s}</option>`).join('');
-    if (prev && seasons.includes(prev)) { sel.value = prev; currentSeason = prev; }
-    else { currentSeason = seasons[0]; sel.value = currentSeason; }
+    if (!sel) return;
+    const prev = currentSeason || currentSeasonNow();
+    sel.innerHTML = availableSeasons.map(s => `<option value="${s}">Saison ${s}</option>`).join('');
+    if (availableSeasons.includes(prev)) { sel.value = prev; currentSeason = prev; }
+    else if (availableSeasons.length) { currentSeason = availableSeasons[0]; sel.value = currentSeason; }
     document.getElementById('season-badge').textContent = currentSeason;
   }
 
   function onSeasonChange() {
     currentSeason = document.getElementById('season-select').value;
     document.getElementById('season-badge').textContent = currentSeason;
+    populateFilters();
+    renderListe();
+    renderStats();
+  }
+
+  function addSeason() {
+    const input = prompt('Neue Jagdsaison eingeben (Format: JJJJ/JJJJ, z.B. 2025/2026):');
+    if (!input) return;
+    const trimmed = input.trim();
+    if (!/^\d{4}\/\d{4}$/.test(trimmed)) { alert('Bitte im Format JJJJ/JJJJ eingeben, z.B. 2025/2026'); return; }
+    db.collection('seasons').add({ label: trimmed }).then(() => {
+      currentSeason = trimmed;
+      showToast('success', '✓ Saison ' + trimmed + ' hinzugefügt!');
+    }).catch(e => showToast('error', 'Fehler: ' + e.message));
+  }
+
+  // ── UI helpers ─────────────────────────────────────────────────
+  function renderAll() {
     populateFilters();
     renderListe();
     renderStats();
@@ -620,6 +616,7 @@
     const reviere = [...new Set(entries.map(e => e.revier).filter(Boolean))].sort();
     const fw = document.getElementById('filter-wild');
     const fr = document.getElementById('filter-revier');
+    if (!fw || !fr) return;
     const sw = fw.value, sr = fr.value;
     fw.innerHTML = '<option value="">Alle Wildarten</option>' + wilds.map(w=>`<option>${w}</option>`).join('');
     fr.innerHTML = '<option value="">Alle Reviere</option>' + reviere.map(r=>`<option>${r}</option>`).join('');
@@ -654,42 +651,92 @@
     setTimeout(() => el.style.display = 'none', 3000);
   }
 
+  function updateHint() {
+    const v = document.getElementById('marke').value.length;
+    document.getElementById('marke-hint').textContent = v + ' / 7 Ziffern';
+  }
+
+  // ── Photo ──────────────────────────────────────────────────────
+  function onPhotoSelected(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const img = new Image();
+      img.onload = function() {
+        const canvas = document.createElement('canvas');
+        const MAX = 800;
+        let w = img.width, h = img.height;
+        if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+        if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        currentPhotoBase64 = canvas.toDataURL('image/jpeg', 0.6);
+        document.getElementById('photo-preview').src = currentPhotoBase64;
+        document.getElementById('photo-preview-wrap').style.display = 'block';
+        document.getElementById('photo-upload-area').style.display = 'none';
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function removePhoto() {
+    currentPhotoBase64 = null;
+    const pi = document.getElementById('photo-input');
+    if (pi) pi.value = '';
+    const pp = document.getElementById('photo-preview');
+    if (pp) pp.src = '';
+    const pw = document.getElementById('photo-preview-wrap');
+    if (pw) pw.style.display = 'none';
+    const pa = document.getElementById('photo-upload-area');
+    if (pa) pa.style.display = 'block';
+  }
+
+  // ── Save entry ─────────────────────────────────────────────────
   async function saveEntry() {
     const wildart = document.getElementById('wildart').value;
     const marke = document.getElementById('marke').value;
     if (!wildart) { showToast('error', 'Bitte Wildart auswählen.'); return; }
     if (marke && marke.length !== 7) { showToast('error', 'Wildmarkennummer muss genau 7 Ziffern haben.'); return; }
 
+    const btn = document.querySelector('.btn-save');
+    btn.disabled = true;
+    btn.textContent = 'Speichert …';
+
     const entry = {
       id: Date.now(),
       wildart,
-      marke,
-      geschlecht: document.getElementById('geschlecht').value,
-      gewicht: document.getElementById('gewicht').value,
-      ak: document.getElementById('ak').value,
-      revier: document.getElementById('revier').value,
-      datum: document.getElementById('datum').value,
-      anmerkung: document.getElementById('anmerkung').value,
+      marke: marke || '',
+      geschlecht: document.getElementById('geschlecht').value || '',
+      gewicht: document.getElementById('gewicht').value || '',
+      ak: document.getElementById('ak').value || '',
+      revier: document.getElementById('revier').value || '',
+      datum: document.getElementById('datum').value || '',
+      anmerkung: document.getElementById('anmerkung').value || '',
       photo: currentPhotoBase64 || null
     };
 
     try {
       await db.collection('entries').add(entry);
-      ['wildart','marke','geschlecht','gewicht','ak','anmerkung'].forEach(id => document.getElementById(id).value = '');
+      ['wildart','marke','geschlecht','gewicht','ak','revier','anmerkung'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
       updateHint();
       removePhoto();
+      document.getElementById('datum').value = new Date().toISOString().split('T')[0];
       showToast('success', '✓ Eintrag gespeichert!');
     } catch(e) {
-      showToast('error', 'Fehler beim Speichern: ' + e.message);
+      showToast('error', 'Fehler: ' + e.message);
+      console.error(e);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Eintrag speichern';
     }
   }
 
-  function fmtDate(d) {
-    if (!d) return '–';
-    const [y,m,day] = d.split('-');
-    return day+'.'+m+'.'+y;
-  }
-
+  // ── Delete ─────────────────────────────────────────────────────
   async function deleteEntry(id) {
     if (!confirm('Eintrag löschen?')) return;
     const entry = allEntries.find(e => e.id == id);
@@ -699,14 +746,23 @@
     } catch(e) { showToast('error', 'Fehler beim Löschen!'); }
   }
 
+  // ── Render list ────────────────────────────────────────────────
+  function fmtDate(d) {
+    if (!d) return '–';
+    const parts = d.split('-');
+    if (parts.length !== 3) return d;
+    return parts[2]+'.'+parts[1]+'.'+parts[0];
+  }
+
   function renderListe() {
     const entries = getFilteredEntries();
     const el = document.getElementById('liste-content');
+    if (!el) return;
     if (!entries.length) { el.innerHTML = '<div class="empty">Keine Einträge für diese Auswahl.</div>'; return; }
     el.innerHTML = entries.map(e => `
       <div class="list-item">
         <div class="list-top">
-          <span class="list-wildart">${e.wildart}</span>
+          <span class="list-wildart">${e.wildart||'–'}</span>
           <div class="list-right">
             <span class="list-date">${fmtDate(e.datum)}</span>
             <button class="del-btn" onclick="deleteEntry(${e.id})">✕</button>
@@ -714,7 +770,7 @@
         </div>
         <div class="list-meta">
           ${e.geschlecht ? `<span class="pill">${e.geschlecht}</span>` : ''}
-          ${e.ak !== '' && e.ak !== undefined ? `<span class="pill">AK ${e.ak}</span>` : ''}
+          ${e.ak !== '' && e.ak !== undefined && e.ak !== null ? `<span class="pill">AK ${e.ak}</span>` : ''}
           ${e.gewicht ? `<span class="pill green">${parseFloat(e.gewicht).toFixed(1)} kg</span>` : ''}
           ${e.marke ? `<span class="pill">Nr. ${e.marke}</span>` : ''}
         </div>
@@ -725,16 +781,18 @@
     `).join('');
   }
 
+  // ── Render stats ───────────────────────────────────────────────
   function renderStats() {
     const entries = getSeasonEntries(currentSeason);
     const el = document.getElementById('stats-content');
+    if (!el) return;
     if (!entries.length) { el.innerHTML = '<div class="empty">Keine Daten für diese Saison.</div>'; return; }
     const total = entries.length;
     const weights = entries.map(e => parseFloat(e.gewicht)).filter(w => !isNaN(w) && w > 0);
     const avgW = weights.length ? (weights.reduce((a,b)=>a+b,0)/weights.length).toFixed(1) : '–';
     const maxW = weights.length ? Math.max(...weights).toFixed(1) : '–';
     const wildC = {}, revierC = {};
-    entries.forEach(e => { wildC[e.wildart] = (wildC[e.wildart]||0)+1; });
+    entries.forEach(e => { if(e.wildart) wildC[e.wildart] = (wildC[e.wildart]||0)+1; });
     entries.forEach(e => { if(e.revier) revierC[e.revier] = (revierC[e.revier]||0)+1; });
     const topWild = Object.entries(wildC).sort((a,b)=>b[1]-a[1]);
     const topRevier = Object.entries(revierC).sort((a,b)=>b[1]-a[1]).slice(0,5);
@@ -746,23 +804,15 @@
         <div class="stat-card"><div class="stat-label">Ø Gewicht</div><div class="stat-value">${avgW !== '–' ? avgW+'kg' : '–'}</div></div>
         <div class="stat-card"><div class="stat-label">Schwerste Beute</div><div class="stat-value">${maxW !== '–' ? maxW+'kg' : '–'}</div></div>
       </div>
-      <div class="chart-section">
-        <div class="chart-title">Strecke nach Wildart</div>
-        ${topWild.map(([n,c])=>`
-          <div class="bar-row"><div class="bar-lbl">${n}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/mW*100)}%"></div></div>
-          <div class="bar-n">${c}</div></div>`).join('')}
+      <div class="chart-section"><div class="chart-title">Strecke nach Wildart</div>
+        ${topWild.map(([n,c])=>`<div class="bar-row"><div class="bar-lbl">${n}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/mW*100)}%"></div></div><div class="bar-n">${c}</div></div>`).join('')}
       </div>
-      ${topRevier.length ? `<div class="chart-section">
-        <div class="chart-title">Strecke nach Revier</div>
-        ${topRevier.map(([n,c])=>`
-          <div class="bar-row"><div class="bar-lbl">${n}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/mR*100)}%"></div></div>
-          <div class="bar-n">${c}</div></div>`).join('')}
-      </div>` : ''}
-    `;
+      ${topRevier.length ? `<div class="chart-section"><div class="chart-title">Strecke nach Revier</div>
+        ${topRevier.map(([n,c])=>`<div class="bar-row"><div class="bar-lbl">${n}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.round(c/mR*100)}%"></div></div><div class="bar-n">${c}</div></div>`).join('')}
+      </div>` : ''}`;
   }
 
+  // ── Export CSV ─────────────────────────────────────────────────
   function exportCSV(mode) {
     const entries = mode === 'all' ? allEntries : getSeasonEntries(currentSeason);
     if (!entries.length) { alert('Keine Einträge zum Exportieren.'); return; }
@@ -772,8 +822,7 @@
       e.geschlecht||'', e.gewicht||'', e.ak !== undefined ? e.ak : '',
       e.revier||'', (e.anmerkung||'').replace(/"/g,'""')
     ].map(v=>`"${v}"`).join(';'));
-    const csv = '﻿' + [headers.join(';'), ...rows].join('
-');
+    const csv = '\uFEFF' + [headers.join(';'), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -783,6 +832,7 @@
     URL.revokeObjectURL(url);
   }
 
+  // ── View photo fullscreen ──────────────────────────────────────
   function viewPhoto(id) {
     const entry = allEntries.find(e => e.id == id);
     if (!entry || !entry.photo) return;
@@ -790,11 +840,14 @@
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:999;display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.innerHTML = '<img src="' + entry.photo + '" style="max-width:100%;max-height:90dvh;border-radius:10px;object-fit:contain;" /><button style="position:absolute;top:20px;right:20px;background:rgba(255,255,255,0.15);color:#fff;border:none;border-radius:20px;padding:6px 14px;font-size:14px;cursor:pointer;font-family:inherit;">✕ Schließen</button>';
     overlay.querySelector('button').onclick = () => overlay.remove();
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.onclick = (ev) => { if (ev.target === overlay) overlay.remove(); };
     document.body.appendChild(overlay);
   }
 
+  // ── Init ───────────────────────────────────────────────────────
   document.getElementById('datum').value = new Date().toISOString().split('T')[0];
+  availableSeasons = [currentSeasonNow()];
+  currentSeason = currentSeasonNow();
   buildSeasonSelect();
 </script>
 </body>
