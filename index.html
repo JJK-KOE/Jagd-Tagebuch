@@ -501,8 +501,27 @@
   async function saveEntry() {
     const wildart=document.getElementById('wildart').value;
     const marke=document.getElementById('marke').value;
+    const geschlecht=document.getElementById('geschlecht').value;
+    const gewicht=document.getElementById('gewicht').value;
+    const ak=document.getElementById('ak').value;
+    const revier=document.getElementById('revier').value;
+    const erleger=document.getElementById('erleger').value.trim();
+    const datum=document.getElementById('datum').value;
+
+    // All fields required
     if(!wildart){showToast('error','Bitte Wildart auswählen.');return;}
-    if(marke&&marke.length!==7){showToast('error','Wildmarkennummer muss genau 7 Ziffern haben.');return;}
+    if(!marke){showToast('error','Bitte Wildmarkennummer eingeben.');return;}
+    if(marke.length!==7){showToast('error','Wildmarkennummer muss genau 7 Ziffern haben.');return;}
+    if(!geschlecht){showToast('error','Bitte Geschlecht auswählen.');return;}
+    if(!gewicht){showToast('error','Bitte Gewicht eingeben.');return;}
+    if(!ak){showToast('error','Bitte Altersklasse auswählen.');return;}
+    if(!revier){showToast('error','Bitte Revier auswählen.');return;}
+    if(!erleger){showToast('error','Bitte Erleger eingeben.');return;}
+    if(!datum){showToast('error','Bitte Datum eingeben.');return;}
+
+    // Check duplicate Wildmarkennummer
+    const duplicate = allEntries.find(e => e.marke === marke && e._docId !== 'pending');
+    if(duplicate){showToast('error','Wildmarkennummer '+marke+' ist bereits vorhanden!');return;}
     const entry={
       id:Date.now(), wildart, marke:marke||'',
       geschlecht:document.getElementById('geschlecht').value||'',
@@ -537,6 +556,11 @@
 
   // ── Edit modal ─────────────────────────────────────────────────
   function openEditModal(id) {
+    const pw = prompt('Passwort eingeben um den Eintrag zu bearbeiten:');
+    if(pw === null) return;
+    if(pw.toLowerCase().trim() !== 'kavelstorf'){
+      alert('Falsches Passwort!'); return;
+    }
     const e=allEntries.find(x=>x.id==id); if(!e) return;
     editingDocId=e._docId;
     document.getElementById('edit-wildart').value=e.wildart||'';
@@ -560,7 +584,11 @@
   async function saveEdit() {
     if(!editingDocId) return;
     const marke=document.getElementById('edit-marke').value;
-    if(marke&&marke.length!==7){alert('Wildmarkennummer muss genau 7 Ziffern haben.');return;}
+    if(!marke){alert('Bitte Wildmarkennummer eingeben.');return;}
+    if(marke.length!==7){alert('Wildmarkennummer muss genau 7 Ziffern haben.');return;}
+    // Check duplicate marke excluding current entry
+    const duplicate = allEntries.find(e => e.marke === marke && e._docId !== editingDocId);
+    if(duplicate){alert('Wildmarkennummer '+marke+' ist bereits vorhanden!');return;}
     const btn=document.querySelector('#edit-modal .btn-save');
     btn.disabled=true; btn.textContent='Speichert …';
     try {
@@ -581,7 +609,11 @@
     finally{btn.disabled=false;btn.textContent='Änderungen speichern';}
   }
   async function deleteFromModal() {
-    if(!editingDocId||!confirm('Eintrag wirklich löschen?')) return;
+    if(!editingDocId) return;
+    const pw = prompt('Passwort eingeben um den Eintrag zu löschen:');
+    if(pw === null) return;
+    if(pw.toLowerCase().trim() !== 'kavelstorf'){ alert('Falsches Passwort!'); return; }
+    if(!confirm('Eintrag wirklich löschen?')) return;
     try{
       await db.collection('entries').doc(editingDocId).delete();
       closeEditModal();
