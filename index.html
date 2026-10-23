@@ -110,15 +110,38 @@
     .modal-title{font-size:17px;font-weight:600;color:var(--text);}
     .modal-close{font-size:20px;color:var(--text3);background:none;border:none;cursor:pointer;}
     .btn-danger{width:100%;padding:13px;font-size:15px;font-weight:500;background:var(--red-bg);color:var(--red-text);border:none;border-radius:var(--radius);cursor:pointer;margin-top:8px;font-family:inherit;}
+    /* LOGIN */
+    .login-overlay{position:fixed;inset:0;background:var(--bg);z-index:200;display:flex;align-items:center;justify-content:center;padding:24px;}
+    .login-overlay[hidden]{display:none;}
+    .login-box{width:100%;max-width:360px;}
+    .login-box h2{font-size:22px;font-weight:600;margin-bottom:6px;color:var(--text);}
+    .login-box p{font-size:14px;color:var(--text2);margin-bottom:20px;}
+    .login-box input{width:100%;font-size:16px;padding:12px;border:0.5px solid var(--border2);border-radius:var(--radius);background:var(--bg);color:var(--text);font-family:inherit;margin-bottom:10px;}
+    .login-btn{width:100%;padding:13px;font-size:15px;font-weight:600;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius);cursor:pointer;font-family:inherit;margin-top:4px;}
+    .login-link{display:block;margin-top:14px;font-size:13px;color:var(--text2);background:none;border:none;cursor:pointer;font-family:inherit;text-decoration:underline;}
+    .login-msg{font-size:13px;margin-top:10px;min-height:18px;}
+    .login-msg.err{color:var(--red-text);} .login-msg.ok{color:var(--green-text);}
+    .logout-btn{font-size:12px;color:var(--text3);background:none;border:none;cursor:pointer;font-family:inherit;margin-left:8px;}
   </style>
 </head>
 <body>
+<div class="login-overlay" id="login-overlay" hidden>
+  <form class="login-box" onsubmit="doLogin(event)">
+    <h2>🦌 Strecke Kavelstorf</h2>
+    <p>Bitte melde dich an. Auf diesem Gerät bleibst du danach angemeldet.</p>
+    <input type="email" id="login-email" placeholder="E-Mail" autocomplete="username" required />
+    <input type="password" id="login-pw" placeholder="Passwort" autocomplete="current-password" required />
+    <button class="login-btn" type="submit" id="login-submit">Anmelden</button>
+    <button class="login-link" type="button" onclick="resetPassword()">Passwort vergessen?</button>
+    <div class="login-msg" id="login-msg"></div>
+  </form>
+</div>
 <div class="app">
   <div class="header">
     <h1>🦌 Strecke Kavelstorf</h1>
     <span class="season-badge" id="season-badge">–</span>
   </div>
-  <div class="sync-bar"><span id="sync-status" style="color:var(--text3);">○ Verbinde …</span></div>
+  <div class="sync-bar" style="display:flex;align-items:center;gap:8px;"><span id="sync-status" style="color:var(--text3);">○ Verbinde …</span><span id="user-info" style="margin-left:auto;font-size:12px;color:var(--text3);"></span><button class="logout-btn" id="logout-btn" onclick="doLogout()" hidden>Abmelden</button></div>
   <div class="season-bar">
     <label>Saison</label>
     <select id="season-select" onchange="onSeasonChange()"></select>
@@ -306,6 +329,7 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script>
   firebase.initializeApp({
     apiKey:"AIzaSyDjpox0VLVHz0ztv7IsCuCxp9fgqXTQQTo",
@@ -327,19 +351,70 @@
   let currentPhotoBase64 = null;
   let editingDocId = null;
 
-  // ── Firebase listeners ─────────────────────────────────────────
-  db.collection('entries').orderBy('id','desc').onSnapshot(snap => {
-    allEntries = snap.docs.map(d => ({...d.data(), _docId:d.id}));
-    rebuildSeasons();
-    renderAll();
-    setStatus('online');
-    checkNewEntries();
-  }, err => { console.error(err); setStatus('offline'); });
+  // ── Anmeldung ──────────────────────────────────────────────────
+  const auth = firebase.auth();
+  let unsubscribers = [];
 
-  db.collection('seasons').orderBy('label','desc').onSnapshot(snap => {
-    const fromDb = snap.docs.map(d => d.data().label);
-    mergeSeasons(fromDb);
-  }, ()=>{});
+  auth.onAuthStateChanged(user => {
+    const overlay = document.getElementById('login-overlay');
+    if (user) {
+      overlay.hidden = true;
+      document.getElementById('user-info').textContent = user.email || '';
+      document.getElementById('logout-btn').hidden = false;
+      startListeners();
+    } else {
+      unsubscribers.forEach(u => u()); unsubscribers = [];
+      document.getElementById('user-info').textContent = '';
+      document.getElementById('logout-btn').hidden = true;
+      overlay.hidden = false;
+      setStatus('offline');
+    }
+  });
+
+  async function doLogin(ev) {
+    ev.preventDefault();
+    const msg = document.getElementById('login-msg'), btn = document.getElementById('login-submit');
+    msg.className = 'login-msg'; msg.textContent = ''; btn.disabled = true;
+    try {
+      await auth.signInWithEmailAndPassword(
+        document.getElementById('login-email').value.trim(),
+        document.getElementById('login-pw').value);
+      document.getElementById('login-pw').value = '';
+    } catch (e) {
+      msg.className = 'login-msg err';
+      msg.textContent = (e.code === 'auth/too-many-requests')
+        ? 'Zu viele Versuche. Bitte kurz warten.'
+        : 'E-Mail oder Passwort falsch.';
+    } finally { btn.disabled = false; }
+  }
+
+  async function resetPassword() {
+    const email = document.getElementById('login-email').value.trim();
+    const msg = document.getElementById('login-msg');
+    if (!email) { msg.className = 'login-msg err'; msg.textContent = 'Bitte zuerst die E-Mail eintragen.'; return; }
+    try { await auth.sendPasswordResetEmail(email); } catch (e) { /* bewusst keine Details */ }
+    msg.className = 'login-msg ok';
+    msg.textContent = 'Falls ein Zugang existiert, wurde eine E-Mail zum Zurücksetzen verschickt.';
+  }
+
+  function doLogout() { auth.signOut(); }
+
+  // ── Firebase listeners ─────────────────────────────────────────
+  function startListeners() {
+    unsubscribers.forEach(u => u()); unsubscribers = [];
+    unsubscribers.push(db.collection('entries').orderBy('id','desc').onSnapshot(snap => {
+      allEntries = snap.docs.map(d => ({...d.data(), _docId:d.id}));
+      rebuildSeasons();
+      renderAll();
+      setStatus('online');
+      checkNewEntries();
+    }, err => { console.error(err); setStatus('offline'); }));
+
+    unsubscribers.push(db.collection('seasons').orderBy('label','desc').onSnapshot(snap => {
+      const fromDb = snap.docs.map(d => d.data().label);
+      mergeSeasons(fromDb);
+    }, ()=>{}));
+  }
 
   function setStatus(s) {
     const el = document.getElementById('sync-status');
