@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Projekte des angemeldeten Nutzers aus users/{email}
+    function projekte() {
+      return get(/databases/$(database)/documents/users/$(request.auth.token.email.lower())).data.projekte;
+    }
+    function darf(projekt) {
+      return request.auth != null && projekt in projekte();
+    }
+
+    // Freischaltungen: jeder darf nur seine eigene lesen, ändern nur in der Konsole
+    match /users/{email} {
+      allow read: if request.auth != null && request.auth.token.email.lower() == email;
+    }
+
+    // Kavelstorf (bisherige Sammlungen)
+    match /entries/{id}        { allow read, write: if darf('kavelstorf'); }
+    match /seasons/{id}        { allow read, write: if darf('kavelstorf'); }
+
+    // Gnoien
+    match /gnoien_entries/{id} { allow read, write: if darf('gnoien'); }
+    match /gnoien_seasons/{id} { allow read, write: if darf('gnoien'); }
+  }
+}
